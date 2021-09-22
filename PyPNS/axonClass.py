@@ -1,4 +1,5 @@
 import neuron
+import time
 from neuron import h
 err = h('load_file("noload.hoc")')
 # if not err == 1:
@@ -427,9 +428,6 @@ class Axon(object):
         #                 If no electrode argument is given, it is necessary to
         #                 set rec_imem=True in order to calculate LFP later on.
         #                 Units of (nA).
-
-
-
         if rec_imem:
             self.set_imem_recorders()
         if self.rec_v:
@@ -441,6 +439,8 @@ class Axon(object):
         h.v_init = self.v_init
         h.finitialize(self.v_init)
         h.tstop = self.tStop
+        
+
 
         # variable time step is indicated by a string as the timeRes parameter of the bundle/axon. Normally 'variable'
         if isinstance(self.timeRes, numbers.Number):
@@ -453,6 +453,7 @@ class Axon(object):
 
         if rec_imem:
             self.calc_imem()
+
 
     def interpxyz(self):
         """

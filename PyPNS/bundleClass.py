@@ -133,9 +133,9 @@ class Bundle(object):
         for i in range(self.numberOfAxons):
             print("Creating axon " + str(i))
             if i < self.numUnmyel:
-                self.create_axon('u', self.axonCoords[i])
+                self.create_axon('u', self.axonCoords[i], i)
             else:
-                self.create_axon('m', self.axonCoords[i])
+                self.create_axon('m', self.axonCoords[i], i)
             self.axonColors[i,:] = np.array(scalarMap.to_rgba(i))
 
 
@@ -220,7 +220,7 @@ class Bundle(object):
 
         return axons_pos
 
-    def create_axon(self, axonType, axonCoords):
+    def create_axon(self, axonType, axonCoords, axonIndex):
 
         """
         The properties of an axon are defined. Axon type (myelinated or unmyelinated) is chosen randomly depending on
@@ -236,7 +236,7 @@ class Bundle(object):
         # axonType = axonTypes[axonTypeIndex]
 
         # then get diameter. Either drawn from distribution or constant.
-        axonDiameter = self._get_diam(axonType)
+        axonDiameter = self._get_diam(axonType, axonIndex)
 
         # calculate the random axon coordinates
         # axonCoords = self.axonCoords[]
@@ -270,7 +270,7 @@ class Bundle(object):
         # self.axons[-1].axonPosition = axonPosition
 
 
-    def _draw_sample(self, distName, params, size=1):
+    def _draw_sample(self, distName, params, axonIndex, size=1):
 
         if distName=='constant':
             # take fixed diameter
@@ -295,15 +295,21 @@ class Bundle(object):
         else:
             # draw from theoretical distribution
 
+            #creating bimodal fast and slow
+            if axonIndex<params[2]:  #comparing to number of fast fibres
+                paramsUsed = params[0]
+            else:
+                paramsUsed = params[1]
+                
             dist = getattr(np.random, distName)
-            diam = dist(*params, size=size)
+            diam = dist(*paramsUsed, size=size)
 
             diam = max(0.3, diam)
 
         return diam
 
 
-    def _get_diam(self, axonType):
+    def _get_diam(self, axonType, axonIndex):
 
         if axonType == 'm':
 
@@ -314,7 +320,7 @@ class Bundle(object):
                 distName = fiberDef['distName']
                 params = fiberDef['params']
 
-                drawnDiam = self._draw_sample(distName, params, size=1)
+                drawnDiam = self._draw_sample(distName, params, axonIndex, size=1)
             elif isinstance(fiberDef, float) or isinstance(fiberDef, int):
                 drawnDiam = fiberDef
             else:
@@ -413,20 +419,67 @@ class Bundle(object):
         for recMech in self.recordingMechanisms:
             recMech.clean_up()
 
+
+    def verify_AP_occurs(self, APThreshold):
+
+        axon = self.axons[0]
+
+        # create the neuron object specified in the axon class object
+        axon.create_neuron_object()
+
+        # connect stimulus, spontaneous spiking, etc.
+        for excitationMechanism in self.excitationMechanisms:
+            excitationMechanism.connect_axon(axon)
+
+        # setup recorder for time
+        # TODO: this has changed, now every axon has trec
+        axon.trec = h.Vector()
+        axon.trec.record(h._ref_t)
+
+        # here we correct the conductance of the slow potassium channel from 0.08 S/cm2 to 0.12 S/cm2 to prevent
+        # multiple action potentials for thin fibers
+        h('forall for (x,0) if (ismembrane("axnode")) gkbar_axnode(x) = 0.12') # .16
+
+        # with takeTime("calculate voltage and membrane current"):
+        axon.simulate()
+
+        if len(self.recordingMechanisms) > 0:
+            # with takeTime("calculate extracellular potential"):
+            recMechIndex = 0
+            for recMech in self.recordingMechanisms:
+                recMech.compute_single_axon_CAP(axon)
+                recMechIndex += 1
+        else:
+            print('No recording mechanisms added. No CAP will be recorded.')
+
+        # plt.figure()
+        # plt.plot(recMech.CAP_axonwise[0])
+        # plt.show()
+
+        #check that the recording mech 0 has voltage above AP threshold
+        if max(recMech.CAP_axonwise[0]) > APThreshold:
+            print('Voltage above threshold')
+            return 1
+        else:
+            print('Voltage below threshold')
+            return 0
+
+
+
     def simulate_axons(self):
         """
         Routine called by :meth:`bundleClass.Bundle.simulate` to simulate all axons.
         """
-
         for axonIndex in range(self.numberOfAxons):
 
             print("\nStarting simulation of axon " + str(axonIndex))
-            tStart = time.time()
+            t_startTime = time.time()
 
             axon = self.axons[axonIndex]
 
             # create the neuron object specified in the axon class object
-            axon.create_neuron_object()
+            if axonIndex>0:     #axon 0 has already been created when calibrating amplitude of stim
+                axon.create_neuron_object()
 
             # connect stimulus, spontaneous spiking, etc.
             for excitationMechanism in self.excitationMechanisms:
@@ -441,17 +494,21 @@ class Bundle(object):
             # multiple action potentials for thin fibers
             h('forall for (x,0) if (ismembrane("axnode")) gkbar_axnode(x) = 0.12') # .16
 
-            with takeTime("calculate voltage and membrane current"):
-                axon.simulate()
+            # with takeTime("calculate voltage and membrane current"):
+            axon.simulate()
 
             if len(self.recordingMechanisms) > 0:
-                with takeTime("calculate extracellular potential"):
-                    recMechIndex = 0
-                    for recMech in self.recordingMechanisms:
-                        recMech.compute_single_axon_CAP(axon)
-                        recMechIndex += 1
+                # with takeTime("calculate extracellular potential"):
+                recMechIndex = 0
+                for recMech in self.recordingMechanisms:
+                    recMech.compute_single_axon_CAP(axon)
+                    recMechIndex += 1
             else:
                 print('No recording mechanisms added. No CAP will be recorded.')
+
+            # plt.figure()
+            # plt.plot(recMech.CAP_axonwise[0])
+            # plt.show()
 
             # TODO: regularize time step for current and voltage here, so you don't need to care about it later
             # TODO: first check how long the interpolation takes.
@@ -467,9 +524,11 @@ class Bundle(object):
             # delete the object
             axon.delete_neuron_object()
 
-            elapsedAxon = time.time() - tStart
+            t_endTime = time.time()
+
             # print ("Overall processing of axon %i took %.2f s. ( %.2f %% saving.)" % (axonIndex, elapsedAxon, (elapsedSaveV + elapsedSaveLFP)/elapsedAxon*100))
-            print ("Overall processing of axon %i took %.2f s." % (axonIndex, elapsedAxon))
+            print ("Overall processing of axon %i took %.2f s." % (axonIndex, t_endTime - t_startTime))
+
 
 
     def store_geometry(self):
